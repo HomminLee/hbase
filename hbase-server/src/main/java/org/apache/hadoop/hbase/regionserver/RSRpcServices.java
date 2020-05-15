@@ -1352,6 +1352,21 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     return builder.toString();
   }
 
+  public String getScanDetailsWithRequest(ScanRequest request) {
+    try {
+      if (!request.hasRegion()) {
+        return null;
+      }
+      Region region = getRegion(request.getRegion());
+      StringBuilder builder = new StringBuilder();
+      builder.append("table: ").append(region.getRegionInfo().getTable().getNameAsString());
+      builder.append(" region: ").append(region.getRegionInfo().getRegionNameAsString());
+      return builder.toString();
+    } catch (IOException ignored) {
+      return null;
+    }
+  }
+
   /**
    * Get the vtime associated with the scanner.
    * Currently the vtime is the number of "next" calls.
@@ -1756,6 +1771,9 @@ public class RSRpcServices implements HBaseRPCErrorHandler,
     }
   }
 
+  // Master implementation of this Admin Service differs given it is not
+  // able to supply detail only known to RegionServer. See note on
+  // MasterRpcServers#getRegionInfo.
   @Override
   @QosPriority(priority=HConstants.ADMIN_QOS)
   public GetRegionInfoResponse getRegionInfo(final RpcController controller,
