@@ -661,7 +661,7 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
   private long flushPerChanges;
   private long blockingMemStoreSize;
   // Used to guard closes
-  final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+  final ReentrantReadWriteLock lock;
 
   // Stop updates lock
   private final ReentrantReadWriteLock updatesLock = new ReentrantReadWriteLock();
@@ -752,6 +752,8 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
     this.conf = new CompoundConfiguration()
       .add(confParam)
       .addBytesMap(htd.getValues());
+    this.lock = new ReentrantReadWriteLock(conf.getBoolean(FAIR_REENTRANT_CLOSE_LOCK,
+        DEFAULT_FAIR_REENTRANT_CLOSE_LOCK));
     this.flushCheckInterval = conf.getInt(MEMSTORE_PERIODIC_FLUSH_INTERVAL,
         DEFAULT_CACHE_FLUSH_INTERVAL);
     this.flushPerChanges = conf.getLong(MEMSTORE_FLUSH_PER_CHANGES, DEFAULT_FLUSH_PER_CHANGES);
@@ -1473,6 +1475,10 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
   private final Object closeLock = new Object();
 
+  /** Conf key for fair locking policy */
+  public static final String FAIR_REENTRANT_CLOSE_LOCK =
+      "hbase.regionserver.fair.region.close.lock";
+  public static final boolean DEFAULT_FAIR_REENTRANT_CLOSE_LOCK = true;
   /** Conf key for the periodic flush interval */
   public static final String MEMSTORE_PERIODIC_FLUSH_INTERVAL =
       "hbase.regionserver.optionalcacheflushinterval";
@@ -2746,22 +2752,21 @@ public class HRegion implements HeapSize, PropagatingConfigurationObserver, Regi
 
       // Switch snapshot (in memstore) -> new hfile (thus causing
       // all the store scanners to reset/reseek).
-      Iterator<HStore> it = storesToFlush.iterator();
-      // stores.values() and storeFlushCtxs have same order
-      for (StoreFlushContext flush : storeFlushCtxs.values()) {
-        boolean needsCompaction = flush.commit(status);
+      for (Map.Entry<byte[], StoreFlushContext> flushEntry : storeFlushCtxs.entrySet()) {
+        StoreFlushContext sfc = flushEntry.getValue();
+        boolean needsCompaction = sfc.commit(status);
         if (needsCompaction) {
           compactionRequested = true;
         }
-        byte[] storeName = it.next().getColumnFamilyDescriptor().getName();
-        List<Path> storeCommittedFiles = flush.getCommittedFiles();
+        byte[] storeName = flushEntry.getKey();
+        List<Path> storeCommittedFiles = sfc.getCommittedFiles();
         committedFiles.put(storeName, storeCommittedFiles);
         // Flush committed no files, indicating flush is empty or flush was canceled
         if (storeCommittedFiles == null || storeCommittedFiles.isEmpty()) {
           MemStoreSize storeFlushableSize = prepareResult.storeFlushableSize.get(storeName);
           prepareResult.totalFlushableSize.decMemStoreSize(storeFlushableSize);
         }
-        flushedOutputFileSize += flush.getOutputFileSize();
+        flushedOutputFileSize += sfc.getOutputFileSize();
       }
       storeFlushCtxs.clear();
 
